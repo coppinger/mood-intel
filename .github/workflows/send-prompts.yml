@@ -1,0 +1,76 @@
+name: Send Mood Check-In Prompts
+
+on:
+  schedule:
+    # Runs every hour from 8am-10pm NZDT (UTC+13)
+    # In UTC: 7pm-9am (19:00 previous day through 09:00 current day)
+    # Adjust these times based on your timezone
+    - cron: '0 19-23 * * *'  # 8am-12pm NZDT
+    - cron: '0 0-9 * * *'     # 1pm-10pm NZDT
+
+  workflow_dispatch:  # Allow manual trigger for testing
+    inputs:
+      channel:
+        description: 'Message channel (sms or whatsapp)'
+        required: false
+        default: 'whatsapp'
+        type: choice
+        options:
+          - sms
+          - whatsapp
+      phone_number:
+        description: 'Phone number (optional, uses YOUR_PHONE_NUMBER env var if not set)'
+        required: false
+        default: ''
+
+jobs:
+  send-prompt:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send mood check-in prompt
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          PHONE_NUMBER: ${{ secrets.PHONE_NUMBER }}
+          CHANNEL: ${{ github.event.inputs.channel || 'whatsapp' }}
+          CUSTOM_PHONE: ${{ github.event.inputs.phone_number || '' }}
+        run: |
+          # Use custom phone number if provided, otherwise use secret
+          PHONE="${CUSTOM_PHONE:-$PHONE_NUMBER}"
+
+          echo "Sending $CHANNEL prompt to $PHONE..."
+
+          # Send prompt via backend API
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$BACKEND_URL/api/sms/send-prompt" \
+            -H "Authorization: Bearer $ADMIN_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"phone_number\": \"$PHONE\", \"channel\": \"$CHANNEL\"}")
+
+          # Extract HTTP status code (last line)
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+
+          # Extract response body (everything except last line)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "Response: $BODY"
+          echo "HTTP Status: $HTTP_CODE"
+
+          # Check if request was successful
+          if [ "$HTTP_CODE" -ne 200 ]; then
+            echo "Error: Failed to send prompt (HTTP $HTTP_CODE)"
+            echo "Response: $BODY"
+            exit 1
+          fi
+
+          echo "✓ Prompt sent successfully via $CHANNEL"
+
+      - name: Report status
+        if: failure()
+        run: |
+          echo "Failed to send prompt. Check the logs above for details."
+          echo "Common issues:"
+          echo "  - Invalid ADMIN_TOKEN (expired or incorrect)"
+          echo "  - BACKEND_URL not accessible"
+          echo "  - Twilio credentials not configured"
+          echo "  - Phone number not verified (for trial accounts)"
