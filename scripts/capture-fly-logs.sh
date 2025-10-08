@@ -6,7 +6,7 @@
 set -e
 
 # Default values
-LINES=500
+NUM_LINES=500
 DATED=false
 APP_NAME=""
 OUTPUT_FILE="logs/latest.log"
@@ -44,7 +44,7 @@ INSTANCE=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --lines)
-            LINES="$2"
+            NUM_LINES="$2"
             shift 2
             ;;
         --dated)
@@ -93,19 +93,19 @@ fi
 mkdir -p logs
 
 # Build fly logs command
-FLY_CMD="fly logs -a $APP_NAME --lines $LINES"
+FLY_CMD="fly logs -a $APP_NAME --no-tail"
 
 if [ -n "$INSTANCE" ]; then
-    FLY_CMD="$FLY_CMD --instance $INSTANCE"
+    FLY_CMD="$FLY_CMD --machine $INSTANCE"
 fi
 
 # Capture logs
 echo "Capturing logs from $APP_NAME..."
-echo "Command: $FLY_CMD"
+echo "Command: $FLY_CMD | tail -n $NUM_LINES"
 echo "Output: $OUTPUT_FILE"
 echo ""
 
-$FLY_CMD > "$OUTPUT_FILE" 2>&1
+$FLY_CMD 2>&1 | tail -n $NUM_LINES > "$OUTPUT_FILE"
 
 echo "✓ Logs saved to $OUTPUT_FILE"
 echo "  Lines captured: $(wc -l < "$OUTPUT_FILE")"
