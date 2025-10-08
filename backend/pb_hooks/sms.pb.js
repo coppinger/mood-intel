@@ -1,22 +1,54 @@
 /// <reference path="../pb_data/types.d.ts" />
 
-console.log('[HOOK] Loading sms.pb.js...');
+console.log('[HOOK] Loading messaging.pb.js (SMS + WhatsApp support)...');
 
 /**
- * Twilio webhook endpoint to receive SMS messages
+ * Helper: Detect messaging channel from phone number format
+ * @param {string} phoneNumber - Phone number from Twilio (may have 'whatsapp:' prefix)
+ * @returns {string} - 'sms' or 'whatsapp'
+ */
+function detectChannel(phoneNumber) {
+  return phoneNumber && phoneNumber.startsWith('whatsapp:') ? 'whatsapp' : 'sms';
+}
+
+/**
+ * Helper: Strip channel prefix from phone number
+ * @param {string} phoneNumber - Phone number (may have 'whatsapp:' or 'sms:' prefix)
+ * @returns {string} - Clean E.164 phone number
+ */
+function cleanPhoneNumber(phoneNumber) {
+  if (!phoneNumber) return phoneNumber;
+  return phoneNumber.replace(/^(whatsapp:|sms:)/, '');
+}
+
+/**
+ * Helper: Add channel prefix to phone number for Twilio
+ * @param {string} channel - 'sms' or 'whatsapp'
+ * @param {string} phoneNumber - E.164 phone number
+ * @returns {string} - Phone number with appropriate prefix
+ */
+function formatPhoneNumber(channel, phoneNumber) {
+  const clean = cleanPhoneNumber(phoneNumber);
+  return channel === 'whatsapp' ? `whatsapp:${clean}` : clean;
+}
+
+/**
+ * Twilio webhook endpoint to receive SMS and WhatsApp messages
+ * Works with both channels - automatically detects based on From field
  */
 routerAdd('POST', '/api/sms/webhook', (c) => {
   try {
-    // Get the request body (Twilio sends form data)
-    const data = c.request().body();
-
-    // Parse URL-encoded form data
-    const params = new URLSearchParams(data);
-    const from = params.get('From');
-    const body = params.get('Body');
+    // Get the request data (Twilio sends form data)
+    const info = $apis.requestInfo(c);
+    const from = info.data.From;
+    const body = info.data.Body;
     const timestamp = new Date();
 
-    console.log(`Received SMS from ${from}: ${body}`);
+    // Detect channel and clean phone number
+    const channel = detectChannel(from);
+    const cleanFrom = cleanPhoneNumber(from);
+
+    console.log(`[${channel.toUpperCase()}] Received message from ${cleanFrom}: ${body}`);
 
     // Process the message with Claude - INLINED
     const prompt = `You are analyzing a mood check-in SMS. Extract structured data from the following message.
@@ -113,7 +145,7 @@ Be concise in insights. Only include insight fields if there's something notable
 
     console.log('Entry saved:', record.id);
 
-    // Send confirmation SMS
+    // Send confirmation message (SMS or WhatsApp)
     try {
       // Base64 encoding function
       const base64Encode = function(str) {
@@ -141,6 +173,10 @@ Be concise in insights. Only include insight fields if there's something notable
       const credentials = `${twilioSid}:${twilioToken}`;
       const authHeader = `Basic ${base64Encode(credentials)}`;
 
+      // Format phone numbers based on channel (add 'whatsapp:' prefix if needed)
+      const formattedFrom = formatPhoneNumber(channel, twilioPhone);
+      const formattedTo = from; // Already has correct format from Twilio
+
       $http.send({
         url: `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
         method: 'POST',
@@ -148,11 +184,13 @@ Be concise in insights. Only include insight fields if there's something notable
           'Authorization': authHeader,
           'Content-Type': 'application/x-www-form-urlencoded'
         },
-        body: `From=${encodeURIComponent(twilioPhone)}&To=${encodeURIComponent(from)}&Body=${encodeURIComponent(confirmationMessage)}`,
+        body: `From=${encodeURIComponent(formattedFrom)}&To=${encodeURIComponent(formattedTo)}&Body=${encodeURIComponent(confirmationMessage)}`,
         timeout: 30
       });
+
+      console.log(`[${channel.toUpperCase()}] Confirmation sent to ${cleanFrom}`);
     } catch (smsError) {
-      console.error('Error sending confirmation SMS:', smsError);
+      console.error(`[${channel.toUpperCase()}] Error sending confirmation:`, smsError);
     }
 
     // Return TwiML response (Twilio expects XML)
@@ -171,16 +209,14 @@ Be concise in insights. Only include insight fields if there's something notable
  */
 routerAdd('POST', '/api/sms/status-callback', (c) => {
   try {
-    // Parse URL-encoded form data (same as webhook handler)
-    const data = c.request().body();
-    const params = new URLSearchParams(data);
-
-    const messageSid = params.get('MessageSid');
-    const messageStatus = params.get('MessageStatus');
-    const errorCode = params.get('ErrorCode');
-    const errorMessage = params.get('ErrorMessage');
-    const to = params.get('To');
-    const from = params.get('From');
+    // Get status callback data from Twilio
+    const info = $apis.requestInfo(c);
+    const messageSid = info.data.MessageSid;
+    const messageStatus = info.data.MessageStatus;
+    const errorCode = info.data.ErrorCode;
+    const errorMessage = info.data.ErrorMessage;
+    const to = info.data.To;
+    const from = info.data.From;
 
     console.log(`[SMS Status Callback] SID: ${messageSid}, Status: ${messageStatus}, To: ${to}`);
 
@@ -197,7 +233,8 @@ routerAdd('POST', '/api/sms/status-callback', (c) => {
 }, $apis.requireGuestOnly())
 
 /**
- * Endpoint to manually send a check-in prompt
+ * Endpoint to manually send a check-in prompt (supports SMS and WhatsApp)
+ * POST body: { "phone_number": "+1234567890", "channel": "sms" | "whatsapp" }
  */
 routerAdd('POST', '/api/sms/send-prompt', (c) => {
   try {
@@ -220,9 +257,12 @@ routerAdd('POST', '/api/sms/send-prompt', (c) => {
 
     const data = $apis.requestInfo(c).data;
     const phoneNumber = data.phone_number || $os.getenv('YOUR_PHONE_NUMBER');
+    const channel = data.channel || 'sms'; // Default to SMS for backwards compatibility
     const message = 'Quick check-in: Mood (1-5), Energy (L/M/H), Doing, Next hour?';
 
-    // Send SMS
+    console.log(`[${channel.toUpperCase()}] Sending prompt to ${phoneNumber}`);
+
+    // Send message via Twilio (SMS or WhatsApp)
     const twilioSid = $os.getenv('TWILIO_ACCOUNT_SID');
     const twilioToken = $os.getenv('TWILIO_AUTH_TOKEN');
     const twilioPhone = $os.getenv('TWILIO_PHONE_NUMBER');
@@ -247,6 +287,10 @@ routerAdd('POST', '/api/sms/send-prompt', (c) => {
     const baseUrl = $os.getenv('PUBLIC_URL') || 'https://mood-intel-backend.fly.dev';
     const statusCallbackUrl = `${baseUrl}/api/sms/status-callback`;
 
+    // Format phone numbers based on channel
+    const formattedFrom = formatPhoneNumber(channel, twilioPhone);
+    const formattedTo = formatPhoneNumber(channel, phoneNumber);
+
     const twilioResponse = $http.send({
       url: `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
       method: 'POST',
@@ -254,13 +298,13 @@ routerAdd('POST', '/api/sms/send-prompt', (c) => {
         'Authorization': authHeader,
         'Content-Type': 'application/x-www-form-urlencoded'
       },
-      body: `From=${encodeURIComponent(twilioPhone)}&To=${encodeURIComponent(phoneNumber)}&Body=${encodeURIComponent(message)}&StatusCallback=${encodeURIComponent(statusCallbackUrl)}`,
+      body: `From=${encodeURIComponent(formattedFrom)}&To=${encodeURIComponent(formattedTo)}&Body=${encodeURIComponent(message)}&StatusCallback=${encodeURIComponent(statusCallbackUrl)}`,
       timeout: 30
     });
 
-    console.log('Twilio response status:', twilioResponse.statusCode);
-    console.log('Twilio response body:', twilioResponse.raw);
-    console.log('Phone numbers - From:', twilioPhone, 'To:', phoneNumber);
+    console.log(`[${channel.toUpperCase()}] Twilio response status:`, twilioResponse.statusCode);
+    console.log(`[${channel.toUpperCase()}] Twilio response body:`, twilioResponse.raw);
+    console.log(`[${channel.toUpperCase()}] Phone numbers - From: ${formattedFrom}, To: ${formattedTo}`);
 
     if (twilioResponse.statusCode === 201 || twilioResponse.statusCode === 200) {
       const responseData = twilioResponse.json;
@@ -320,15 +364,18 @@ routerAdd('POST', '/api/sms/send-prompt', (c) => {
 }, $apis.requireAdminAuth())
 
 /**
- * Test endpoint to simulate receiving an inbound SMS
+ * Test endpoint to simulate receiving an inbound SMS or WhatsApp message
+ * POST body: { "message": "...", "from": "+1234567890", "channel": "sms" | "whatsapp" }
  */
 routerAdd('POST', '/api/sms/test-inbound', (c) => {
   try {
     const data = $apis.requestInfo(c).data;
     const testMessage = data.message || "4, M, working from cafe, probably code some more";
-    const testFrom = data.from || $os.getenv('YOUR_PHONE_NUMBER') || '+1234567890';
+    const channel = data.channel || 'sms';
+    const phoneNumber = data.from || $os.getenv('YOUR_PHONE_NUMBER') || '+1234567890';
+    const testFrom = formatPhoneNumber(channel, phoneNumber);
 
-    console.log(`[TEST] Simulating SMS from ${testFrom}: ${testMessage}`);
+    console.log(`[TEST ${channel.toUpperCase()}] Simulating message from ${testFrom}: ${testMessage}`);
 
     // Process the message with Claude
     const prompt = `You are analyzing a mood check-in SMS. Extract structured data from the following message.

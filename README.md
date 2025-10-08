@@ -1,19 +1,20 @@
 # Mood Intel
 
-Personal mood and energy tracking system via SMS. Text-based check-ins processed by Claude AI, stored in PocketBase, and displayed on a React dashboard.
+Personal mood and energy tracking system via SMS and WhatsApp. Text-based check-ins processed by Claude AI, stored in PocketBase, and displayed on a React dashboard.
 
 ## Features
 
-- **SMS Check-ins**: Receive hourly prompts and reply with your mood, energy level, and what you're doing
+- **SMS & WhatsApp Check-ins**: Receive hourly prompts and reply with your mood, energy level, and what you're doing
 - **AI Processing**: Claude API extracts structured data and generates insights from your responses
 - **Daily View**: Timeline of entries with mood/energy charts
 - **Weekly View**: Heatmap visualization showing patterns across the week
 - **Secure**: Password-protected dashboard with single-user authentication
+- **Multi-Channel**: Works with both SMS and WhatsApp using the same webhook
 
 ## Tech Stack
 
 - **Backend**: PocketBase (self-hosted database and API)
-- **SMS**: Twilio
+- **Messaging**: Twilio (SMS + WhatsApp)
 - **AI**: Claude API (Sonnet 4.5)
 - **Frontend**: React + Vite + Tailwind CSS + Recharts
 - **Deployment**: Fly.io
@@ -108,6 +109,7 @@ open https://mood-intel-backend.fly.dev/_/
 
 ### 4. Configure Twilio Webhook
 
+#### For SMS:
 1. Go to your [Twilio Console](https://console.twilio.com)
 2. Navigate to Phone Numbers → Your active number
 3. Under "Messaging", set webhook URL to:
@@ -116,6 +118,49 @@ open https://mood-intel-backend.fly.dev/_/
    ```
 4. Set HTTP method to `POST`
 5. Save
+
+#### For WhatsApp (Recommended):
+
+**Option A: Quick Testing with WhatsApp Sandbox (5 minutes)**
+
+Perfect for testing before going to production:
+
+1. Go to [Twilio Console → Messaging → Try it out → Send a WhatsApp message](https://console.twilio.com/us1/develop/sms/try-it-out/whatsapp-learn)
+2. Click **Sandbox settings**
+3. Set the webhook URL to:
+   ```
+   https://mood-intel-backend.fly.dev/api/sms/webhook
+   ```
+4. Set HTTP method to `POST`
+5. Save
+6. On your phone, open WhatsApp and send this message to the Twilio sandbox number shown:
+   ```
+   join <your-sandbox-code>
+   ```
+7. You'll receive a confirmation - now you can send test check-ins!
+
+**Limitations of Sandbox:**
+- Only works for people who've joined your sandbox
+- Shared Twilio number (can't customize)
+- "Sandbox" appears in message preview
+- Testing only (don't use for production)
+
+**Option B: Production WhatsApp Setup**
+
+For long-term use with your own WhatsApp Business number:
+
+1. Go to [Twilio Console → Messaging → Senders → WhatsApp senders](https://console.twilio.com/us1/develop/sms/senders/whatsapp-senders)
+2. Click **New WhatsApp Sender**
+3. Follow Twilio's approval process (usually 2-3 days)
+4. Once approved, configure webhook URL (same as sandbox above)
+5. Register message templates for your check-in prompts
+
+**Why WhatsApp?**
+- ✅ More reliable international delivery
+- ✅ Free messages (after Twilio/WhatsApp fees)
+- ✅ Better multimedia support
+- ✅ No SMS carrier issues
+- ✅ Works great for NZ numbers!
 
 ### 5. Deploy Frontend
 
@@ -136,18 +181,45 @@ flyctl info
 # Open the URL in your browser
 ```
 
-### 6. Test the SMS Flow
+### 6. Test the Messaging Flow
 
-Send a test SMS to manually trigger a check-in:
-
+#### Send a Test Prompt (SMS)
 ```bash
-# Using the backend API
 curl -X POST https://mood-intel-backend.fly.dev/api/sms/send-prompt \
   -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
-  -H "Content-Type: application/json"
+  -H "Content-Type: application/json" \
+  -d '{"phone_number": "+1234567890", "channel": "sms"}'
 ```
 
-Or set up scheduled messages in Twilio to send hourly prompts (8am-10pm).
+#### Send a Test Prompt (WhatsApp)
+```bash
+curl -X POST https://mood-intel-backend.fly.dev/api/sms/send-prompt \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"phone_number": "+1234567890", "channel": "whatsapp"}'
+```
+
+#### Test Locally Without Twilio
+```bash
+# Test SMS webhook
+curl -X POST http://localhost:8080/api/sms/test-inbound \
+  -H "Content-Type: application/json" \
+  -d '{"message": "4, M, testing, coding", "from": "+1234567890", "channel": "sms"}'
+
+# Test WhatsApp webhook
+curl -X POST http://localhost:8080/api/sms/test-inbound \
+  -H "Content-Type: application/json" \
+  -d '{"message": "5, H, testing WhatsApp, deploying", "from": "+1234567890", "channel": "whatsapp"}'
+```
+
+Or use the included test script:
+```bash
+chmod +x scripts/test-whatsapp-integration.sh
+./scripts/test-whatsapp-integration.sh http://localhost:8080
+```
+
+#### Set Up Scheduled Prompts
+Set up scheduled messages in Twilio to send hourly prompts (8am-10pm) via SMS or WhatsApp.
 
 ## Local Development
 
@@ -222,7 +294,7 @@ Open http://localhost:5173 in your browser.
 
 ## Usage
 
-### SMS Format
+### Message Format (SMS or WhatsApp)
 
 When you receive a check-in prompt:
 ```
@@ -235,10 +307,13 @@ Reply with something like:
 ```
 
 The system will:
-1. Extract structured data (mood: 4, energy: H, doing: "working from coffee shop", etc.)
-2. Store in database
-3. Generate insights if patterns are detected
-4. Send confirmation
+1. Automatically detect if you're using SMS or WhatsApp
+2. Extract structured data (mood: 4, energy: H, doing: "working from coffee shop", etc.)
+3. Store in database with channel information
+4. Generate insights if patterns are detected
+5. Send confirmation via the same channel
+
+**Note**: Both SMS and WhatsApp messages are processed identically - the system automatically detects which channel you're using and responds accordingly.
 
 ### Dashboard Views
 
@@ -273,10 +348,23 @@ Update the mood field validation in `backend/pb_migrations/1728393600_created_en
 
 ## Troubleshooting
 
-**SMS not received:**
-- Check Twilio webhook URL is correct
-- View Twilio logs in console
+**SMS/WhatsApp not received:**
+- Check Twilio webhook URL is correct (should be same for both channels)
+- View Twilio logs in console to see delivery status
 - Check backend logs: `flyctl logs -a mood-intel-backend`
+- Look for `[SMS]` or `[WHATSAPP]` prefixes in logs to verify channel detection
+
+**WhatsApp-specific issues:**
+- **Sandbox not working**: Make sure you've joined the sandbox by sending `join <code>` to the Twilio WhatsApp number
+- **Message not delivered**: Check if your number is still connected to the sandbox (sandbox connections expire after 72 hours of inactivity)
+- **Production approval pending**: Use the sandbox for testing while waiting for approval
+- **Template rejected**: Review Twilio's WhatsApp template guidelines and resubmit
+
+**Message sent but no confirmation:**
+- Check Twilio account balance
+- Verify TWILIO_PHONE_NUMBER is set correctly
+- For WhatsApp, ensure you're using the sandbox number or approved WhatsApp sender
+- Check backend logs for Twilio API errors
 
 **Claude API errors:**
 - Verify API key is set correctly
@@ -288,13 +376,32 @@ Update the mood field validation in `backend/pb_migrations/1728393600_created_en
 - Clear browser cookies and try again
 - Check VITE_POCKETBASE_URL is correct
 
+**Channel detection issues:**
+- Backend automatically detects channel based on `From` field format
+- SMS: `From=+1234567890`
+- WhatsApp: `From=whatsapp:+1234567890`
+- Check logs for `[SMS]` or `[WHATSAPP]` prefix to verify detection
+
 ## Cost Estimates
 
+### Using SMS:
 - **Fly.io**: ~$5-10/month (backend + frontend + storage)
-- **Twilio**: ~$1-2/month (1 phone number + SMS)
+- **Twilio SMS**: ~$1-2/month (1 phone number + ~500 messages)
 - **Claude API**: ~$1-3/month (depending on usage)
 
 **Total: ~$7-15/month**
+
+### Using WhatsApp (Recommended for NZ):
+- **Fly.io**: ~$5-10/month (backend + frontend + storage)
+- **Twilio WhatsApp**: ~$0.50-1/month (WhatsApp conversations are cheaper than SMS!)
+  - Sandbox: FREE for testing
+  - Production: ~$0.005-0.01 per conversation (much cheaper than SMS)
+  - User-initiated conversations may be free depending on region
+- **Claude API**: ~$1-3/month (depending on usage)
+
+**Total: ~$6.50-14/month** (potentially cheaper than SMS!)
+
+**Note**: WhatsApp pricing is conversation-based (24-hour windows), not per-message, so you can send multiple messages within a conversation for the same cost. This makes WhatsApp significantly cheaper for frequent check-ins.
 
 ## Future Enhancements
 
