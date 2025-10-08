@@ -3,38 +3,10 @@
 console.log('[HOOK] Loading messaging.pb.js (SMS + WhatsApp support)...');
 
 /**
- * Helper: Detect messaging channel from phone number format
- * @param {string} phoneNumber - Phone number from Twilio (may have 'whatsapp:' prefix)
- * @returns {string} - 'sms' or 'whatsapp'
- */
-function detectChannel(phoneNumber) {
-  return phoneNumber && phoneNumber.startsWith('whatsapp:') ? 'whatsapp' : 'sms';
-}
-
-/**
- * Helper: Strip channel prefix from phone number
- * @param {string} phoneNumber - Phone number (may have 'whatsapp:' or 'sms:' prefix)
- * @returns {string} - Clean E.164 phone number
- */
-function cleanPhoneNumber(phoneNumber) {
-  if (!phoneNumber) return phoneNumber;
-  return phoneNumber.replace(/^(whatsapp:|sms:)/, '');
-}
-
-/**
- * Helper: Add channel prefix to phone number for Twilio
- * @param {string} channel - 'sms' or 'whatsapp'
- * @param {string} phoneNumber - E.164 phone number
- * @returns {string} - Phone number with appropriate prefix
- */
-function formatPhoneNumber(channel, phoneNumber) {
-  const clean = cleanPhoneNumber(phoneNumber);
-  return channel === 'whatsapp' ? `whatsapp:${clean}` : clean;
-}
-
-/**
  * Twilio webhook endpoint to receive SMS and WhatsApp messages
  * Works with both channels - automatically detects based on From field
+ *
+ * Note: Helper functions are inlined due to PocketBase's isolated callback execution
  */
 routerAdd('POST', '/api/sms/webhook', (c) => {
   try {
@@ -44,9 +16,9 @@ routerAdd('POST', '/api/sms/webhook', (c) => {
     const body = info.data.Body;
     const timestamp = new Date();
 
-    // Detect channel and clean phone number
-    const channel = detectChannel(from);
-    const cleanFrom = cleanPhoneNumber(from);
+    // Detect channel and clean phone number (inlined due to PocketBase scoping)
+    const channel = from && from.startsWith('whatsapp:') ? 'whatsapp' : 'sms';
+    const cleanFrom = from ? from.replace(/^(whatsapp:|sms:)/, '') : from;
 
     console.log(`[${channel.toUpperCase()}] Received message from ${cleanFrom}: ${body}`);
 
@@ -174,7 +146,8 @@ Be concise in insights. Only include insight fields if there's something notable
       const authHeader = `Basic ${base64Encode(credentials)}`;
 
       // Format phone numbers based on channel (add 'whatsapp:' prefix if needed)
-      const formattedFrom = formatPhoneNumber(channel, twilioPhone);
+      const cleanTwilioPhone = twilioPhone ? twilioPhone.replace(/^(whatsapp:|sms:)/, '') : twilioPhone;
+      const formattedFrom = channel === 'whatsapp' ? `whatsapp:${cleanTwilioPhone}` : cleanTwilioPhone;
       const formattedTo = from; // Already has correct format from Twilio
 
       $http.send({
@@ -287,9 +260,11 @@ routerAdd('POST', '/api/sms/send-prompt', (c) => {
     const baseUrl = $os.getenv('PUBLIC_URL') || 'https://mood-intel-backend.fly.dev';
     const statusCallbackUrl = `${baseUrl}/api/sms/status-callback`;
 
-    // Format phone numbers based on channel
-    const formattedFrom = formatPhoneNumber(channel, twilioPhone);
-    const formattedTo = formatPhoneNumber(channel, phoneNumber);
+    // Format phone numbers based on channel (inlined due to PocketBase scoping)
+    const cleanTwilioPhone = twilioPhone ? twilioPhone.replace(/^(whatsapp:|sms:)/, '') : twilioPhone;
+    const formattedFrom = channel === 'whatsapp' ? `whatsapp:${cleanTwilioPhone}` : cleanTwilioPhone;
+    const cleanPhoneNumber = phoneNumber ? phoneNumber.replace(/^(whatsapp:|sms:)/, '') : phoneNumber;
+    const formattedTo = channel === 'whatsapp' ? `whatsapp:${cleanPhoneNumber}` : cleanPhoneNumber;
 
     const twilioResponse = $http.send({
       url: `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
@@ -373,7 +348,10 @@ routerAdd('POST', '/api/sms/test-inbound', (c) => {
     const testMessage = data.message || "4, M, working from cafe, probably code some more";
     const channel = data.channel || 'sms';
     const phoneNumber = data.from || $os.getenv('YOUR_PHONE_NUMBER') || '+1234567890';
-    const testFrom = formatPhoneNumber(channel, phoneNumber);
+
+    // Format phone number based on channel (inlined due to PocketBase scoping)
+    const cleanPhone = phoneNumber ? phoneNumber.replace(/^(whatsapp:|sms:)/, '') : phoneNumber;
+    const testFrom = channel === 'whatsapp' ? `whatsapp:${cleanPhone}` : cleanPhone;
 
     console.log(`[TEST ${channel.toUpperCase()}] Simulating message from ${testFrom}: ${testMessage}`);
 

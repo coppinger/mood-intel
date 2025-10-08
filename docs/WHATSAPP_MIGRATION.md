@@ -13,14 +13,21 @@ This document explains the changes made to support WhatsApp alongside SMS.
 ### 🔧 Modified Files
 
 #### 1. `backend/pb_hooks/sms.pb.js`
-**What changed**: Added channel detection and formatting helpers
+**What changed**: Added channel detection and formatting logic (inlined)
 
-**New helper functions**:
+**Channel detection logic** (inlined due to PocketBase scoping):
 ```javascript
-detectChannel(phoneNumber)       // Returns 'sms' or 'whatsapp'
-cleanPhoneNumber(phoneNumber)    // Strips 'whatsapp:' or 'sms:' prefix
-formatPhoneNumber(channel, phone) // Adds correct prefix for Twilio
+// Detect channel
+const channel = from && from.startsWith('whatsapp:') ? 'whatsapp' : 'sms';
+
+// Clean phone number
+const cleanFrom = from ? from.replace(/^(whatsapp:|sms:)/, '') : from;
+
+// Format for Twilio
+const formatted = channel === 'whatsapp' ? `whatsapp:${cleanPhone}` : cleanPhone;
 ```
+
+**Important**: Helper functions are **inlined** in each callback because PocketBase executes each `routerAdd` callback in an isolated context where global functions aren't accessible.
 
 **Updated endpoints**:
 - `/api/sms/webhook`: Now handles both SMS and WhatsApp
